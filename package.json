@@ -5,6 +5,7 @@
   "description": "show your rightcode subscriptions in vscode",
   "version": "0.0.1",
   "license": "MIT",
+  "icon": "images/rightcode.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/un4gt/rightcode-bar.git"
