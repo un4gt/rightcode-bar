@@ -6,4 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
-- Initial release
+## [0.0.2]
+
+- Status bar subscription display + hover table tooltip
+- Secure token/cookie storage via VS Code SecretStorage
+- CI: package VSIX, publish to Marketplace, upload GitHub Release assets
