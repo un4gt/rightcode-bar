@@ -1,0 +1,102 @@
+{
+  "name": "rightcode-bar",
+  "displayName": "rightcode-bar",
+  "description": "show your rightcode subscriptions in vscode",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:rightcode-bar.refresh",
+    "onCommand:rightcode-bar.setToken",
+    "onCommand:rightcode-bar.setCookie",
+    "onCommand:rightcode-bar.clearAuth",
+    "onCommand:rightcode-bar.openSettings"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "rightcode-bar.refresh",
+        "title": "RightCode: Refresh Subscription"
+      },
+      {
+        "command": "rightcode-bar.setToken",
+        "title": "RightCode: Set Token (Secure)"
+      },
+      {
+        "command": "rightcode-bar.setCookie",
+        "title": "RightCode: Set Cookie (Secure)"
+      },
+      {
+        "command": "rightcode-bar.clearAuth",
+        "title": "RightCode: Clear Token/Cookie (Secure)"
+      },
+      {
+        "command": "rightcode-bar.openSettings",
+        "title": "RightCode: Open Settings"
+      }
+    ],
+    "configuration": {
+      "title": "RightCode Bar",
+      "properties": {
+        "rightcodeBar.token": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "RightCode token used for `Authorization: Bearer <token>`. For better security, prefer the command `RightCode: Set Token (Secure)` (stores in OS keychain) instead of saving in `settings.json`."
+        },
+        "rightcodeBar.cookie": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "Cookie header value used for requests (e.g. `cf_clearance=...`). For better security, prefer the command `RightCode: Set Cookie (Secure)` (stores in OS keychain) instead of saving in `settings.json`."
+        },
+        "rightcodeBar.refreshIntervalSeconds": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "scope": "application",
+          "description": "Auto refresh interval in seconds (0 disables polling)."
+        },
+        "rightcodeBar.requestTimeoutMs": {
+          "type": "number",
+          "default": 15000,
+          "minimum": 1000,
+          "scope": "application",
+          "description": "Request timeout in milliseconds."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "pnpm run package",
+    "compile": "pnpm run check-types && pnpm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "pnpm run check-types && pnpm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "pnpm run compile-tests && pnpm run compile && pnpm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "typescript-eslint": "^8.48.1",
+    "eslint": "^9.39.1",
+    "esbuild": "^0.27.1",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}
