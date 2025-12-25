@@ -70,6 +70,11 @@ jobs:
       - name: Package VSIX
         run: pnpm dlx @vscode/vsce package --no-dependencies --allow-missing-repository
 
+      - name: Publish to VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.PAT }}
+        run: pnpm dlx @vscode/vsce publish --no-dependencies --allow-missing-repository --skip-duplicate --packagePath *.vsix
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
