@@ -4,6 +4,15 @@
   "displayName": "rightcode-bar",
   "description": "show your rightcode subscriptions in vscode",
   "version": "0.0.1",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/un4gt/rightcode-bar.git"
+  },
+  "bugs": {
+    "url": "https://github.com/un4gt/rightcode-bar/issues"
+  },
+  "homepage": "https://github.com/un4gt/rightcode-bar#readme",
   "engines": {
     "vscode": "^1.90.0"
   },
