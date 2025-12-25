@@ -1,5 +1,6 @@
 {
   "name": "rightcode-bar",
+  "publisher": "tumuerzunong",
   "displayName": "rightcode-bar",
   "description": "show your rightcode subscriptions in vscode",
   "version": "0.0.1",
