@@ -427,7 +427,7 @@ function buildSuccessTooltip(params: {
 			? `**${escapeTableCell(subscription.name)}**`
 			: escapeTableCell(subscription.name);
 		tooltip.appendMarkdown(
-			`| ${nameCell} | ${formatQuota(subscription.remainingQuota)} | ${formatQuota(subscription.totalQuota)} | ${formatQuota(usedQuota(subscription))} | ${formatDateYmd(subscription.expiredAt)} | ${formatDateMd(subscription.lastResetAt ?? undefined)} | ${formatBooleanYesNo(subscription.resetToday)} |`,
+			`| ${nameCell} | $${formatQuota(subscription.remainingQuota)} | $${formatQuota(subscription.totalQuota)} | $${formatQuota(usedQuota(subscription))} | ${formatDateYmd(subscription.expiredAt)} | ${formatDateMd(subscription.lastResetAt ?? undefined)} | ${formatBooleanYesNo(subscription.resetToday)} |`,
 		);
 		tooltip.appendMarkdown(`\n`);
 	}
@@ -881,7 +881,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			statusBarItem.text = `${selected.name} 剩余 ${formatQuota(selected.remainingQuota)}`;
+			statusBarItem.text = `${selected.name} 剩余 $${formatQuota(selected.remainingQuota)}`;
 			statusBarItem.tooltip = buildSuccessTooltip({
 				selected,
 				all: result.subscriptions,
