@@ -21,11 +21,39 @@ type SubscriptionListResult = {
 	subscriptions: RightCodeSubscription[];
 };
 
+type RightCodeUseLogTrendItem = {
+	date: string;
+	requests: number;
+	cost: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheCreationTokens: number;
+	cacheReadTokens: number;
+};
+
+type RightCodeUseLogModelDetails = {
+	model: string;
+	requests: number;
+	totalTokens: number;
+	totalCost: number;
+};
+
+type RightCodeUseLogAdvancedStats = {
+	trend: RightCodeUseLogTrendItem[];
+	totalRequests: number;
+	totalCost: number;
+	totalTokens: number;
+	tokensByModel: Record<string, number>;
+	detailsByModel: RightCodeUseLogModelDetails[];
+};
+
 const RIGHTCODE_SUBSCRIPTIONS_URL = 'https://right.codes/subscriptions/list';
+const RIGHTCODE_USE_LOG_ADVANCED_URL = 'https://right.codes/use-log/stats/advanced';
 const RIGHTCODE_REFERER = 'https://right.codes/dashboard';
 const DEFAULT_USER_AGENT =
 	'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:146.0) Gecko/20100101 Firefox/146.0';
 const STATUS_TEXT_ERROR = '获取订阅失败，更新token或者cookie';
+const STATUS_TEXT_DASHBOARD_ERROR = '获取数据失败，请更新 token 或 cookie';
 const SECRET_KEY_TOKEN = 'rightcodeBar.token';
 const SECRET_KEY_COOKIE = 'rightcodeBar.cookie';
 
@@ -228,6 +256,160 @@ async function fetchSubscriptionList(params: {
 	}
 }
 
+function parseUseLogTrendItem(raw: unknown): RightCodeUseLogTrendItem | undefined {
+	if (!isRecord(raw)) {
+		return undefined;
+	}
+
+	const date = parseString(raw.date);
+	const requests = parseFiniteNumber(raw.requests);
+	const cost = parseFiniteNumber(raw.cost);
+	const inputTokens = parseFiniteNumber(raw.input_tokens);
+	const outputTokens = parseFiniteNumber(raw.output_tokens);
+	const cacheCreationTokens = parseFiniteNumber(raw.cache_creation_tokens);
+	const cacheReadTokens = parseFiniteNumber(raw.cache_read_tokens);
+	if (
+		date === undefined ||
+		requests === undefined ||
+		cost === undefined ||
+		inputTokens === undefined ||
+		outputTokens === undefined ||
+		cacheCreationTokens === undefined ||
+		cacheReadTokens === undefined
+	) {
+		return undefined;
+	}
+
+	return {
+		date,
+		requests,
+		cost,
+		inputTokens,
+		outputTokens,
+		cacheCreationTokens,
+		cacheReadTokens,
+	};
+}
+
+function parseUseLogModelDetails(raw: unknown): RightCodeUseLogModelDetails | undefined {
+	if (!isRecord(raw)) {
+		return undefined;
+	}
+
+	const model = parseString(raw.model);
+	const requests = parseFiniteNumber(raw.requests);
+	const totalTokens = parseFiniteNumber(raw.total_tokens);
+	const totalCost = parseFiniteNumber(raw.total_cost);
+	if (model === undefined || requests === undefined || totalTokens === undefined || totalCost === undefined) {
+		return undefined;
+	}
+
+	return {
+		model,
+		requests,
+		totalTokens,
+		totalCost,
+	};
+}
+
+function parseTokensByModel(raw: unknown): Record<string, number> {
+	if (!isRecord(raw)) {
+		return {};
+	}
+
+	const tokensByModel: Record<string, number> = {};
+	for (const [key, value] of Object.entries(raw)) {
+		const parsed = parseFiniteNumber(value);
+		if (parsed !== undefined) {
+			tokensByModel[key] = parsed;
+		}
+	}
+	return tokensByModel;
+}
+
+function parseUseLogAdvancedStats(raw: unknown): RightCodeUseLogAdvancedStats {
+	if (!isRecord(raw)) {
+		throw new Error('Unexpected response: not an object');
+	}
+
+	const trendRaw = raw.trend;
+	const trend = Array.isArray(trendRaw)
+		? trendRaw.map(parseUseLogTrendItem).filter((value): value is RightCodeUseLogTrendItem => value !== undefined)
+		: [];
+
+	const totalRequests = parseFiniteNumber(raw.total_requests) ?? 0;
+	const totalCost = parseFiniteNumber(raw.total_cost) ?? 0;
+	const totalTokens = parseFiniteNumber(raw.total_tokens) ?? 0;
+	const tokensByModel = parseTokensByModel(raw.tokens_by_model);
+
+	const detailsRaw = raw.details_by_model;
+	const detailsByModel = Array.isArray(detailsRaw)
+		? detailsRaw
+				.map(parseUseLogModelDetails)
+				.filter((value): value is RightCodeUseLogModelDetails => value !== undefined)
+		: [];
+
+	return { trend, totalRequests, totalCost, totalTokens, tokensByModel, detailsByModel };
+}
+
+async function fetchUseLogAdvancedStats(params: {
+	token: string;
+	cookie: string;
+	startDate: string;
+	endDate: string;
+	granularity: 'day' | 'hour';
+	requestTimeoutMs: number;
+	output: vscode.OutputChannel;
+}): Promise<RightCodeUseLogAdvancedStats> {
+	const controller = new AbortController();
+	const timeoutHandle = setTimeout(() => controller.abort(), params.requestTimeoutMs);
+
+	try {
+		const url = new URL(RIGHTCODE_USE_LOG_ADVANCED_URL);
+		url.searchParams.set('start_date', params.startDate);
+		url.searchParams.set('end_date', params.endDate);
+		url.searchParams.set('granularity', params.granularity);
+
+		const response = await fetch(url.toString(), {
+			method: 'GET',
+			headers: {
+				Accept: '*/*',
+				'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+				'Accept-Encoding': 'gzip, deflate, br',
+				'Content-Type': 'application/json',
+				'User-Agent': DEFAULT_USER_AGENT,
+				Referer: RIGHTCODE_REFERER,
+				Authorization: `Bearer ${params.token}`,
+				Cookie: params.cookie,
+				'Sec-GPC': '1',
+			},
+			signal: controller.signal,
+		});
+
+		const responseText = await response.text();
+		if (!response.ok) {
+			params.output.appendLine(
+				`HTTP ${response.status} ${response.statusText} from ${RIGHTCODE_USE_LOG_ADVANCED_URL}: ${responseText.slice(0, 200)}`,
+			);
+			throw new Error(`Request failed: HTTP ${response.status}`);
+		}
+
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(responseText) as unknown;
+		} catch {
+			params.output.appendLine(
+				`Failed to parse JSON from ${RIGHTCODE_USE_LOG_ADVANCED_URL}: ${responseText.slice(0, 200)}`,
+			);
+			throw new Error('Request failed: invalid JSON response');
+		}
+
+		return parseUseLogAdvancedStats(parsed);
+	} finally {
+		clearTimeout(timeoutHandle);
+	}
+}
+
 function buildSuccessTooltip(params: {
 	selected: RightCodeSubscription;
 	all: RightCodeSubscription[];
@@ -295,9 +477,369 @@ function getConfig(): {
 	return { token, cookie, refreshIntervalSeconds, requestTimeoutMs };
 }
 
+class DashboardViewProvider implements vscode.WebviewViewProvider {
+	static readonly viewType = 'rightcodeBar.dashboard';
+	private currentView: vscode.WebviewView | undefined;
+	private refreshSubscriptionsInProgress = false;
+	private refreshUsageStatsInProgress = false;
+
+	constructor(
+		private readonly extensionUri: vscode.Uri,
+		private readonly output: vscode.OutputChannel,
+		private readonly getAuth: () => Promise<{ token: string; cookie: string }>,
+	) {}
+
+	resolveWebviewView(webviewView: vscode.WebviewView): void {
+		this.currentView = webviewView;
+		webviewView.webview.options = {
+			enableScripts: true,
+			localResourceRoots: [
+				vscode.Uri.joinPath(this.extensionUri, 'media'),
+				vscode.Uri.joinPath(this.extensionUri, 'images'),
+			],
+		};
+
+		webviewView.webview.html = this.getHtml(webviewView.webview);
+
+		webviewView.webview.onDidReceiveMessage((message) => {
+			void this.handleWebviewMessage(message);
+		});
+	}
+
+	private async handleWebviewMessage(message: unknown): Promise<void> {
+		if (!isRecord(message)) {
+			return;
+		}
+
+		const type = message.type;
+		if (type === 'rightcodeBar.dashboard.requestSubscriptions') {
+			await this.refreshSubscriptions();
+			return;
+		}
+
+		if (type === 'rightcodeBar.dashboard.requestUsageStats') {
+			const granularity = parseString(message.granularity);
+			const startDate = parseString(message.startDate);
+			const endDate = parseString(message.endDate);
+			if (granularity !== 'day' && granularity !== 'hour') {
+				return;
+			}
+			if (!startDate || !endDate) {
+				return;
+			}
+
+			await this.refreshUsageStats({ granularity, startDate, endDate });
+		}
+	}
+
+	private async refreshSubscriptions(): Promise<void> {
+		const view = this.currentView;
+		if (!view) {
+			return;
+		}
+
+		if (this.refreshSubscriptionsInProgress) {
+			return;
+		}
+		this.refreshSubscriptionsInProgress = true;
+
+		try {
+			const { requestTimeoutMs } = getConfig();
+			const { token, cookie } = await this.getAuth();
+			if (!token || !cookie) {
+				void view.webview.postMessage({
+					type: 'rightcodeBar.dashboard.subscriptions',
+					ok: false,
+					error:
+						'未配置认证信息：请通过命令面板执行 “RightCode: Set Token (Secure)” / “RightCode: Set Cookie (Secure)”。',
+				});
+				return;
+			}
+
+			const result = await fetchSubscriptionList({
+				token,
+				cookie,
+				requestTimeoutMs,
+				output: this.output,
+			});
+
+			void view.webview.postMessage({
+				type: 'rightcodeBar.dashboard.subscriptions',
+				ok: true,
+				refreshedAt: new Date().toISOString(),
+				total: result.total,
+				subscriptions: result.subscriptions,
+			});
+		} catch (error) {
+			const messageText = error instanceof Error ? error.message : String(error);
+			this.output.appendLine(`[error] dashboard subscriptions: ${messageText}`);
+			void view.webview.postMessage({
+				type: 'rightcodeBar.dashboard.subscriptions',
+				ok: false,
+				error: `${STATUS_TEXT_ERROR}（${messageText}）`,
+			});
+		} finally {
+			this.refreshSubscriptionsInProgress = false;
+		}
+	}
+
+	private async refreshUsageStats(params: {
+		startDate: string;
+		endDate: string;
+		granularity: 'day' | 'hour';
+	}): Promise<void> {
+		const view = this.currentView;
+		if (!view) {
+			return;
+		}
+
+		if (this.refreshUsageStatsInProgress) {
+			return;
+		}
+		this.refreshUsageStatsInProgress = true;
+
+		try {
+			const { requestTimeoutMs } = getConfig();
+			const { token, cookie } = await this.getAuth();
+			if (!token || !cookie) {
+				void view.webview.postMessage({
+					type: 'rightcodeBar.dashboard.usageStats',
+					ok: false,
+					error:
+						'未配置认证信息：请通过命令面板执行 “RightCode: Set Token (Secure)” / “RightCode: Set Cookie (Secure)”。',
+				});
+				return;
+			}
+
+			const result = await fetchUseLogAdvancedStats({
+				token,
+				cookie,
+				startDate: params.startDate,
+				endDate: params.endDate,
+				granularity: params.granularity,
+				requestTimeoutMs,
+				output: this.output,
+			});
+
+			void view.webview.postMessage({
+				type: 'rightcodeBar.dashboard.usageStats',
+				ok: true,
+				refreshedAt: new Date().toISOString(),
+				startDate: params.startDate,
+				endDate: params.endDate,
+				granularity: params.granularity,
+				stats: result,
+			});
+		} catch (error) {
+			const messageText = error instanceof Error ? error.message : String(error);
+			this.output.appendLine(`[error] dashboard usage stats: ${messageText}`);
+			void view.webview.postMessage({
+				type: 'rightcodeBar.dashboard.usageStats',
+				ok: false,
+				error: `${STATUS_TEXT_DASHBOARD_ERROR}（${messageText}）`,
+			});
+		} finally {
+			this.refreshUsageStatsInProgress = false;
+		}
+	}
+
+	private getHtml(webview: vscode.Webview): string {
+		const nonce = getNonce();
+		const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'dashboard.css'));
+		const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'dashboard.js'));
+		const logoUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'images', 'rightcode-activitybar.png'));
+
+		return `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';" />
+	<link href="${styleUri}" rel="stylesheet" />
+</head>
+<body>
+	<div class="rc-bg" aria-hidden="true"></div>
+	<div class="page">
+		<header class="header">
+			<div class="brand">
+				<img class="brand__logo" src="${logoUri}" alt="" />
+				<div class="brand__text">
+					<div class="brand__title">RightCode Dashboard</div>
+				</div>
+			</div>
+		</header>
+
+		<main class="content">
+			<section class="top-grid">
+				<section class="panel panel--subscription" aria-label="我的订阅">
+					<div class="panel__header">
+						<h2 class="panel__title">我的订阅</h2>
+						<div class="panel__actions">
+							<button class="btn btn--ghost" id="subsRefreshBtn" type="button">刷新</button>
+						</div>
+					</div>
+
+					<div class="carousel" id="subscriptionCarousel">
+						<button class="icon-btn" id="subsPrevBtn" type="button" aria-label="上一条订阅">
+							<svg viewBox="0 0 24 24" aria-hidden="true">
+								<path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+							</svg>
+						</button>
+						<div class="carousel__viewport" role="region" aria-label="订阅切换区域" tabindex="0">
+							<div class="carousel__track" id="subsTrack"></div>
+						</div>
+						<button class="icon-btn" id="subsNextBtn" type="button" aria-label="下一条订阅">
+							<svg viewBox="0 0 24 24" aria-hidden="true">
+								<path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+							</svg>
+						</button>
+					</div>
+					<div class="carousel__dots" id="subsDots" aria-hidden="true"></div>
+					<div class="hint" id="subsHint"></div>
+				</section>
+
+				<section class="panel" aria-label="Token 使用情况">
+					<div class="panel__header">
+						<h2 class="panel__title">Token 使用情况</h2>
+					</div>
+
+					<div class="toolbar" role="group" aria-label="时间范围与刷新">
+						<div class="toolbar__group" role="group" aria-label="聚合方式">
+							<button class="pill is-active" type="button" data-granularity="day">按天</button>
+							<button class="pill" type="button" data-granularity="hour">按小时</button>
+						</div>
+						<div class="toolbar__group" role="group" aria-label="快捷范围">
+							<button class="pill pill--ghost" type="button" data-range="today" data-granularity="both">今日</button>
+							<button class="pill pill--ghost is-active" type="button" data-range="7d" data-granularity="day">7天</button>
+							<button class="pill pill--ghost" type="button" data-range="30d" data-granularity="day">30天</button>
+							<button class="pill pill--ghost" type="button" data-range="yesterday" data-granularity="hour">昨天</button>
+							<button class="pill pill--ghost" type="button" data-range="2d" data-granularity="hour">前天</button>
+						</div>
+						<div class="toolbar__spacer"></div>
+						<button class="pill pill--accent" id="refreshBtn" type="button">刷新</button>
+						<button class="toggle" id="autoRefreshToggle" type="button" role="switch" aria-checked="false">
+							<span class="toggle__thumb" aria-hidden="true"></span>
+							<span class="toggle__label">自动刷新 <span class="toggle__meta">60s</span></span>
+						</button>
+						<div class="date-range" aria-label="日期范围">
+							<div class="date-range__label">日期范围</div>
+							<div class="date-range__value" id="dateRangeText">-</div>
+						</div>
+					</div>
+
+					<div class="stats-grid" aria-label="汇总指标">
+						<div class="stat-card">
+							<div class="stat-card__label">累计请求</div>
+							<div class="stat-card__value" id="metricRequests">-</div>
+						</div>
+						<div class="stat-card">
+							<div class="stat-card__label">累计 Token</div>
+							<div class="stat-card__value" id="metricTokens">-</div>
+						</div>
+						<div class="stat-card">
+							<div class="stat-card__label">累计花费</div>
+							<div class="stat-card__value" id="metricCost">-</div>
+						</div>
+					</div>
+				</section>
+			</section>
+
+			<section class="bottom-grid" aria-label="统计详情">
+				<section class="panel" aria-label="Token 使用分布">
+					<div class="panel__header">
+						<h2 class="panel__title">Token 使用分布</h2>
+					</div>
+					<div class="distribution">
+						<div class="donut" id="donut" aria-label="Token 使用分布图"></div>
+						<div class="legend" id="legend" aria-label="模型占比图例"></div>
+					</div>
+				</section>
+
+				<section class="panel" aria-label="详细统计数据">
+					<div class="panel__header">
+						<h2 class="panel__title">详细统计数据</h2>
+					</div>
+					<div class="table-wrap">
+						<table class="table" aria-label="模型统计表">
+							<thead>
+								<tr>
+									<th>模型</th>
+									<th class="num">请求数</th>
+									<th class="num">总 Token</th>
+									<th class="num">费用</th>
+									<th class="num">占比</th>
+								</tr>
+							</thead>
+							<tbody id="detailsTableBody"></tbody>
+						</table>
+					</div>
+				</section>
+			</section>
+
+			<div class="footer">
+				<div id="lastUpdatedText">最后刷新：-</div>
+			</div>
+		</main>
+	</div>
+
+	<script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+	}
+}
+
+function getNonce(): string {
+	let text = '';
+	const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+	for (let index = 0; index < 32; index++) {
+		text += possible.charAt(Math.floor(Math.random() * possible.length));
+	}
+	return text;
+}
+
+function createAuthReader(params: {
+	context: vscode.ExtensionContext;
+	output: vscode.OutputChannel;
+}): () => Promise<{ token: string; cookie: string }> {
+	let warnedTokenFromSettings = false;
+	let warnedCookieFromSettings = false;
+
+	return async (): Promise<{ token: string; cookie: string }> => {
+		const { token: tokenFromSettings, cookie: cookieFromSettings } = getConfig();
+		const tokenFromSecret = (await params.context.secrets.get(SECRET_KEY_TOKEN))?.trim() ?? '';
+		const cookieFromSecret = (await params.context.secrets.get(SECRET_KEY_COOKIE))?.trim() ?? '';
+
+		if (!tokenFromSecret && tokenFromSettings && !warnedTokenFromSettings) {
+			params.output.appendLine(
+				'[warn] rightcodeBar.token is read from settings.json (plain text). Prefer "RightCode: Set Token (Secure)".',
+			);
+			warnedTokenFromSettings = true;
+		}
+		if (!cookieFromSecret && cookieFromSettings && !warnedCookieFromSettings) {
+			params.output.appendLine(
+				'[warn] rightcodeBar.cookie is read from settings.json (plain text). Prefer "RightCode: Set Cookie (Secure)".',
+			);
+			warnedCookieFromSettings = true;
+		}
+
+		const token = normalizeTokenInput(tokenFromSecret || tokenFromSettings);
+		const cookie = normalizeCookieInput(cookieFromSecret || cookieFromSettings);
+		return { token, cookie };
+	};
+}
+
 export function activate(context: vscode.ExtensionContext) {
 	const output = vscode.window.createOutputChannel('RightCode Bar');
 	context.subscriptions.push(output);
+
+	const getAuth = createAuthReader({ context, output });
+
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(
+			DashboardViewProvider.viewType,
+			new DashboardViewProvider(context.extensionUri, output, getAuth),
+		),
+	);
 
 	const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 	statusBarItem.name = 'RightCode Subscription';
@@ -308,31 +850,6 @@ export function activate(context: vscode.ExtensionContext) {
 
 	let refreshTimer: NodeJS.Timeout | undefined;
 	let refreshInProgress = false;
-	let warnedTokenFromSettings = false;
-	let warnedCookieFromSettings = false;
-
-	const getAuth = async (): Promise<{ token: string; cookie: string }> => {
-		const { token: tokenFromSettings, cookie: cookieFromSettings } = getConfig();
-		const tokenFromSecret = (await context.secrets.get(SECRET_KEY_TOKEN))?.trim() ?? '';
-		const cookieFromSecret = (await context.secrets.get(SECRET_KEY_COOKIE))?.trim() ?? '';
-
-		if (!tokenFromSecret && tokenFromSettings && !warnedTokenFromSettings) {
-			output.appendLine(
-				'[warn] rightcodeBar.token is read from settings.json (plain text). Prefer "RightCode: Set Token (Secure)".',
-			);
-			warnedTokenFromSettings = true;
-		}
-		if (!cookieFromSecret && cookieFromSettings && !warnedCookieFromSettings) {
-			output.appendLine(
-				'[warn] rightcodeBar.cookie is read from settings.json (plain text). Prefer "RightCode: Set Cookie (Secure)".',
-			);
-			warnedCookieFromSettings = true;
-		}
-
-		const token = normalizeTokenInput(tokenFromSecret || tokenFromSettings);
-		const cookie = normalizeCookieInput(cookieFromSecret || cookieFromSettings);
-		return { token, cookie };
-	};
 
 	const refresh = async (): Promise<void> => {
 		if (refreshInProgress) {

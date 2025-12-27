@@ -26,10 +26,29 @@
     "onCommand:rightcode-bar.setToken",
     "onCommand:rightcode-bar.setCookie",
     "onCommand:rightcode-bar.clearAuth",
-    "onCommand:rightcode-bar.openSettings"
+    "onCommand:rightcode-bar.openSettings",
+    "onView:rightcodeBar.dashboard"
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rightcodeBar",
+          "title": "RightCode",
+          "icon": "images/rightcode-activitybar.png"
+        }
+      ]
+    },
+    "views": {
+      "rightcodeBar": [
+        {
+          "id": "rightcodeBar.dashboard",
+          "name": "Dashboard",
+          "type": "webview"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "rightcode-bar.refresh",
