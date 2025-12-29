@@ -21,20 +21,30 @@
 
 ## 配置（用户设置 / 全局）
 
-推荐使用安全命令（写入系统密钥链 / Keychain）：
+在 VS Code 用户设置中添加（会明文写入 `settings.json`）：
 
-- `RightCode: Set Token (Secure)`
-- `RightCode: Set Cookie (Secure)`
+- `rightcodeBar.accounts`（推荐：多账号）
+- `rightcodeBar.activeAccount`（当前账号别名；留空默认第一个）
+- 或者：`rightcodeBar.token`（单账号）
 
-也可以在 VS Code 用户设置中添加（不推荐：会明文写入 `settings.json`）：
+示例：
 
-- `rightcodeBar.token`: 用于 `Authorization: Bearer <token>`
-- `rightcodeBar.cookie`: 用于请求的 `Cookie`（通常需要 `cf_clearance=...`）
+```json
+{
+  "rightcodeBar.accounts": [
+    { "alias": "工作", "token": "YOUR_TOKEN_1" },
+    { "alias": "个人", "token": "YOUR_TOKEN_2" }
+  ],
+  "rightcodeBar.activeAccount": "工作"
+}
+```
+
+升级提示（0.0.4+）：不再需要/支持 `rightcodeBar.cookie`，也移除了所有“安全输入/密钥链”相关命令；请改用以上设置项。
 
 命令面板：
 
 - `RightCode: Refresh Subscription`
-- `RightCode: Clear Token/Cookie (Secure)`
+- `RightCode: Switch Account`
 - `RightCode: Open Settings`
 
-> 注意：token/cookie 属于敏感信息，请勿提交到仓库或截图公开。
+> 注意：token 属于敏感信息，请勿提交到仓库或截图公开。
