@@ -6,6 +6,12 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.4]
+
+- 配置改为仅 settings.json：支持多账号 `rightcodeBar.accounts` + `rightcodeBar.activeAccount`
+- 移除 cookie / SecretStorage（不再提供安全输入命令）
+- 缩减包体积：优化图标尺寸，更新 `.vscodeignore`
+
 ## [0.0.3]
 
 - Activity Bar 新增 `RightCode` 侧边栏入口（Dashboard Webview）
