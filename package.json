@@ -23,9 +23,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:rightcode-bar.refresh",
-    "onCommand:rightcode-bar.setToken",
-    "onCommand:rightcode-bar.setCookie",
-    "onCommand:rightcode-bar.clearAuth",
+    "onCommand:rightcode-bar.account.switch",
     "onCommand:rightcode-bar.openSettings",
     "onView:rightcodeBar.dashboard"
   ],
@@ -55,36 +53,66 @@
         "title": "RightCode: Refresh Subscription"
       },
       {
-        "command": "rightcode-bar.setToken",
-        "title": "RightCode: Set Token (Secure)"
-      },
-      {
-        "command": "rightcode-bar.setCookie",
-        "title": "RightCode: Set Cookie (Secure)"
-      },
-      {
-        "command": "rightcode-bar.clearAuth",
-        "title": "RightCode: Clear Token/Cookie (Secure)"
+        "command": "rightcode-bar.account.switch",
+        "title": "RightCode: Switch Account",
+        "icon": "$(account)"
       },
       {
         "command": "rightcode-bar.openSettings",
         "title": "RightCode: Open Settings"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "rightcode-bar.account.switch",
+          "when": "view == rightcodeBar.dashboard",
+          "group": "navigation@1"
+        },
+        {
+          "command": "rightcode-bar.openSettings",
+          "when": "view == rightcodeBar.dashboard",
+          "group": "navigation@2"
+        }
+      ]
+    },
     "configuration": {
       "title": "RightCode Bar",
       "properties": {
+        "rightcodeBar.accounts": {
+          "type": "array",
+          "default": [],
+          "scope": "application",
+          "markdownDescription": "RightCode accounts (multi-account). Each item is `{ \"alias\": \"...\", \"token\": \"...\" }`. Tokens are stored in `settings.json` in plain text.",
+          "items": {
+            "type": "object",
+            "required": [
+              "alias",
+              "token"
+            ],
+            "properties": {
+              "alias": {
+                "type": "string",
+                "description": "Account alias shown in the status bar/dashboard."
+              },
+              "token": {
+                "type": "string",
+                "description": "RightCode token used for `Authorization: Bearer <token>`."
+              }
+            }
+          }
+        },
+        "rightcodeBar.activeAccount": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "description": "Active account alias (matches an item in rightcodeBar.accounts). Empty uses the first account."
+        },
         "rightcodeBar.token": {
           "type": "string",
           "default": "",
           "scope": "application",
-          "markdownDescription": "RightCode token used for `Authorization: Bearer <token>`. For better security, prefer the command `RightCode: Set Token (Secure)` (stores in OS keychain) instead of saving in `settings.json`."
-        },
-        "rightcodeBar.cookie": {
-          "type": "string",
-          "default": "",
-          "scope": "application",
-          "markdownDescription": "Cookie header value used for requests (e.g. `cf_clearance=...`). For better security, prefer the command `RightCode: Set Cookie (Secure)` (stores in OS keychain) instead of saving in `settings.json`."
+          "markdownDescription": "RightCode token used for `Authorization: Bearer <token>` (single-account fallback). For multi-account, use `rightcodeBar.accounts` + `rightcodeBar.activeAccount`. Stored in `settings.json` in plain text."
         },
         "rightcodeBar.refreshIntervalSeconds": {
           "type": "number",

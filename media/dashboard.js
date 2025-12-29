@@ -209,6 +209,10 @@
 		vscode.postMessage({ type: 'rightcodeBar.dashboard.requestSubscriptions' });
 	}
 
+	function requestAccount() {
+		vscode.postMessage({ type: 'rightcodeBar.dashboard.requestAccount' });
+	}
+
 	function renderSubscriptionsError(message) {
 		const track = document.getElementById('subsTrack');
 		const dots = document.getElementById('subsDots');
@@ -713,6 +717,11 @@
 		const subsRefreshBtn = document.getElementById('subsRefreshBtn');
 		subsRefreshBtn?.addEventListener('click', requestSubscriptions);
 
+		const accountSwitchBtn = document.getElementById('accountSwitchBtn');
+		accountSwitchBtn?.addEventListener('click', () => {
+			vscode.postMessage({ type: 'rightcodeBar.dashboard.switchAccount' });
+		});
+
 		const toggle = document.getElementById('autoRefreshToggle');
 		toggle?.addEventListener('click', () => {
 			if (!(toggle instanceof HTMLButtonElement)) {
@@ -729,6 +738,7 @@
 		document.body.dataset.granularity = usageState.granularity;
 		syncToolbarState();
 		bindCarouselControls();
+		requestAccount();
 		requestSubscriptions();
 		requestUsageStats();
 		bindToolbar();
@@ -738,6 +748,15 @@
 		const message = event.data;
 		if (!isRecord(message)) {
 			return;
+		}
+
+		if (message.type === 'rightcodeBar.dashboard.account' || message.type === 'rightcodeBar.dashboard.accountChanged') {
+			const label = typeof message.label === 'string' ? message.label : '-';
+			setText('accountText', `账号：${label}`);
+			if (message.type === 'rightcodeBar.dashboard.accountChanged') {
+				requestSubscriptions();
+				requestUsageStats();
+			}
 		}
 
 		if (message.type === 'rightcodeBar.dashboard.subscriptions') {

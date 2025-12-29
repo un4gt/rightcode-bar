@@ -47,15 +47,28 @@ type RightCodeUseLogAdvancedStats = {
 	detailsByModel: RightCodeUseLogModelDetails[];
 };
 
+type RightCodeAuthContext = {
+	token: string;
+	accountLabel: string;
+	accountAlias?: string;
+};
+
+type RightCodeAccountConfig = {
+	alias: string;
+	token: string;
+};
+
 const RIGHTCODE_SUBSCRIPTIONS_URL = 'https://right.codes/subscriptions/list';
 const RIGHTCODE_USE_LOG_ADVANCED_URL = 'https://right.codes/use-log/stats/advanced';
 const RIGHTCODE_REFERER = 'https://right.codes/dashboard';
 const DEFAULT_USER_AGENT =
 	'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:146.0) Gecko/20100101 Firefox/146.0';
-const STATUS_TEXT_ERROR = '获取订阅失败，更新token或者cookie';
-const STATUS_TEXT_DASHBOARD_ERROR = '获取数据失败，请更新 token 或 cookie';
-const SECRET_KEY_TOKEN = 'rightcodeBar.token';
-const SECRET_KEY_COOKIE = 'rightcodeBar.cookie';
+const STATUS_TEXT_ERROR = '获取订阅失败，请检查 token';
+const STATUS_TEXT_DASHBOARD_ERROR = '获取数据失败，请检查 token';
+
+const COMMAND_REFRESH = 'rightcode-bar.refresh';
+const COMMAND_OPEN_SETTINGS = 'rightcode-bar.openSettings';
+const COMMAND_ACCOUNT_SWITCH = 'rightcode-bar.account.switch';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
@@ -82,23 +95,64 @@ function parseBoolean(value: unknown): boolean | undefined {
 	return typeof value === 'boolean' ? value : undefined;
 }
 
+function parseAccountsConfig(raw: unknown): RightCodeAccountConfig[] {
+	if (Array.isArray(raw)) {
+		const accounts: RightCodeAccountConfig[] = [];
+		for (const item of raw) {
+			if (!isRecord(item)) {
+				continue;
+			}
+
+			const alias = parseString(item.alias ?? item.label)?.trim() ?? '';
+			const token = normalizeTokenInput(parseString(item.token) ?? '');
+			if (!alias || !token) {
+				continue;
+			}
+
+			accounts.push({ alias, token });
+		}
+		return accounts;
+	}
+
+	if (isRecord(raw)) {
+		const accounts: RightCodeAccountConfig[] = [];
+		for (const [aliasRaw, tokenRaw] of Object.entries(raw)) {
+			if (typeof tokenRaw !== 'string') {
+				continue;
+			}
+
+			const alias = aliasRaw.trim();
+			const token = normalizeTokenInput(tokenRaw);
+			if (!alias || !token) {
+				continue;
+			}
+
+			accounts.push({ alias, token });
+		}
+		return accounts;
+	}
+
+	return [];
+}
+
+function uniqAccountsByAlias(accounts: RightCodeAccountConfig[]): RightCodeAccountConfig[] {
+	const seen = new Set<string>();
+	const result: RightCodeAccountConfig[] = [];
+	for (const account of accounts) {
+		if (seen.has(account.alias)) {
+			continue;
+		}
+		seen.add(account.alias);
+		result.push(account);
+	}
+	return result;
+}
+
 function normalizeTokenInput(value: string): string {
 	let normalized = value.trim();
 	normalized = normalized.replace(/^authorization\s*:\s*/i, '');
 	normalized = normalized.replace(/^bearer\s+/i, '');
 	normalized = normalized.trim();
-	if (
-		(normalized.startsWith('"') && normalized.endsWith('"')) ||
-		(normalized.startsWith("'") && normalized.endsWith("'"))
-	) {
-		normalized = normalized.slice(1, -1).trim();
-	}
-	return normalized;
-}
-
-function normalizeCookieInput(value: string): string {
-	let normalized = value.trim();
-	normalized = normalized.replace(/^cookie\s*:\s*/i, '').trim();
 	if (
 		(normalized.startsWith('"') && normalized.endsWith('"')) ||
 		(normalized.startsWith("'") && normalized.endsWith("'"))
@@ -208,7 +262,6 @@ function parseSubscriptionListResult(raw: unknown): SubscriptionListResult {
 
 async function fetchSubscriptionList(params: {
 	token: string;
-	cookie: string;
 	requestTimeoutMs: number;
 	output: vscode.OutputChannel;
 }): Promise<SubscriptionListResult> {
@@ -226,7 +279,6 @@ async function fetchSubscriptionList(params: {
 				'User-Agent': DEFAULT_USER_AGENT,
 				Referer: RIGHTCODE_REFERER,
 				Authorization: `Bearer ${params.token}`,
-				Cookie: params.cookie,
 				'Sec-GPC': '1',
 			},
 			signal: controller.signal,
@@ -354,7 +406,6 @@ function parseUseLogAdvancedStats(raw: unknown): RightCodeUseLogAdvancedStats {
 
 async function fetchUseLogAdvancedStats(params: {
 	token: string;
-	cookie: string;
 	startDate: string;
 	endDate: string;
 	granularity: 'day' | 'hour';
@@ -380,7 +431,6 @@ async function fetchUseLogAdvancedStats(params: {
 				'User-Agent': DEFAULT_USER_AGENT,
 				Referer: RIGHTCODE_REFERER,
 				Authorization: `Bearer ${params.token}`,
-				Cookie: params.cookie,
 				'Sec-GPC': '1',
 			},
 			signal: controller.signal,
@@ -411,12 +461,17 @@ async function fetchUseLogAdvancedStats(params: {
 }
 
 function buildSuccessTooltip(params: {
+	accountLabel: string;
 	selected: RightCodeSubscription;
 	all: RightCodeSubscription[];
 	refreshedAt: Date;
 }): vscode.MarkdownString {
 	const tooltip = new vscode.MarkdownString(undefined, true);
+	tooltip.isTrusted = true;
 	tooltip.appendMarkdown(`**RightCode 订阅**\n\n`);
+	tooltip.appendMarkdown(
+		`当前账号：\`${escapeTableCell(params.accountLabel)}\` ([切换](command:${COMMAND_ACCOUNT_SWITCH}))\n\n`,
+	);
 	tooltip.appendMarkdown(`| 名称 | 剩余 | 总额 | 已用 | 到期 | 上次重置 | 今日重置 |\n`);
 	tooltip.appendMarkdown(`|---|---:|---:|---:|:---:|:---:|:---:|\n`);
 
@@ -439,10 +494,12 @@ function buildSuccessTooltip(params: {
 
 function buildMissingConfigTooltip(): vscode.MarkdownString {
 	const tooltip = new vscode.MarkdownString(undefined, true);
+	tooltip.isTrusted = true;
 	tooltip.appendMarkdown(`**RightCode 订阅**\n\n`);
 	tooltip.appendMarkdown(`未配置认证信息：\n\n`);
-	tooltip.appendMarkdown(`- 推荐：命令面板执行 \`RightCode: Set Token (Secure)\` / \`RightCode: Set Cookie (Secure)\`（存入系统密钥链）\n`);
-	tooltip.appendMarkdown(`- 或者：在用户设置中填写 \`rightcodeBar.token\` / \`rightcodeBar.cookie\`（不推荐，会明文写入 settings.json）\n\n`);
+	tooltip.appendMarkdown(`- 推荐：在用户设置中填写 \`rightcodeBar.accounts\`（多账号：别名 + token）\n`);
+	tooltip.appendMarkdown(`- 或者：填写 \`rightcodeBar.token\`（单账号）\n\n`);
+	tooltip.appendMarkdown(`快捷：([切换账号](command:${COMMAND_ACCOUNT_SWITCH})) / ([打开设置](command:${COMMAND_OPEN_SETTINGS}))\n\n`);
 	tooltip.appendMarkdown(`命令面板：\`RightCode: Open Settings\`。\n`);
 	return tooltip;
 }
@@ -465,16 +522,18 @@ function buildNoSubscriptionTooltip(refreshedAt: Date): vscode.MarkdownString {
 
 function getConfig(): {
 	token: string;
-	cookie: string;
+	accounts: RightCodeAccountConfig[];
+	activeAccount: string;
 	refreshIntervalSeconds: number;
 	requestTimeoutMs: number;
 } {
 	const config = vscode.workspace.getConfiguration('rightcodeBar');
 	const token = (config.get<string>('token') ?? '').trim();
-	const cookie = (config.get<string>('cookie') ?? '').trim();
+	const accounts = uniqAccountsByAlias(parseAccountsConfig(config.get<unknown>('accounts')));
+	const activeAccount = (config.get<string>('activeAccount') ?? '').trim();
 	const refreshIntervalSeconds = config.get<number>('refreshIntervalSeconds') ?? 300;
 	const requestTimeoutMs = config.get<number>('requestTimeoutMs') ?? 15000;
-	return { token, cookie, refreshIntervalSeconds, requestTimeoutMs };
+	return { token, accounts, activeAccount, refreshIntervalSeconds, requestTimeoutMs };
 }
 
 class DashboardViewProvider implements vscode.WebviewViewProvider {
@@ -486,7 +545,7 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 	constructor(
 		private readonly extensionUri: vscode.Uri,
 		private readonly output: vscode.OutputChannel,
-		private readonly getAuth: () => Promise<{ token: string; cookie: string }>,
+		private readonly getAuth: () => Promise<RightCodeAuthContext>,
 	) {}
 
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -504,6 +563,8 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 		webviewView.webview.onDidReceiveMessage((message) => {
 			void this.handleWebviewMessage(message);
 		});
+
+		void this.postAccountInfo('rightcodeBar.dashboard.account');
 	}
 
 	private async handleWebviewMessage(message: unknown): Promise<void> {
@@ -512,6 +573,16 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		const type = message.type;
+		if (type === 'rightcodeBar.dashboard.requestAccount') {
+			await this.postAccountInfo('rightcodeBar.dashboard.account');
+			return;
+		}
+
+		if (type === 'rightcodeBar.dashboard.switchAccount') {
+			await vscode.commands.executeCommand(COMMAND_ACCOUNT_SWITCH);
+			return;
+		}
+
 		if (type === 'rightcodeBar.dashboard.requestSubscriptions') {
 			await this.refreshSubscriptions();
 			return;
@@ -532,6 +603,24 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
+	async notifyAccountChanged(): Promise<void> {
+		await this.postAccountInfo('rightcodeBar.dashboard.accountChanged');
+	}
+
+	private async postAccountInfo(type: 'rightcodeBar.dashboard.account' | 'rightcodeBar.dashboard.accountChanged'): Promise<void> {
+		const view = this.currentView;
+		if (!view) {
+			return;
+		}
+
+		const auth = await this.getAuth();
+		void view.webview.postMessage({
+			type,
+			label: auth.accountLabel,
+			hasAuth: Boolean(auth.token),
+		});
+	}
+
 	private async refreshSubscriptions(): Promise<void> {
 		const view = this.currentView;
 		if (!view) {
@@ -545,20 +634,18 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 
 		try {
 			const { requestTimeoutMs } = getConfig();
-			const { token, cookie } = await this.getAuth();
-			if (!token || !cookie) {
+			const { token } = await this.getAuth();
+			if (!token) {
 				void view.webview.postMessage({
 					type: 'rightcodeBar.dashboard.subscriptions',
 					ok: false,
-					error:
-						'未配置认证信息：请通过命令面板执行 “RightCode: Set Token (Secure)” / “RightCode: Set Cookie (Secure)”。',
+					error: '未配置认证信息：请在 VS Code 设置中填写 rightcodeBar.accounts 或 rightcodeBar.token。',
 				});
 				return;
 			}
 
 			const result = await fetchSubscriptionList({
 				token,
-				cookie,
 				requestTimeoutMs,
 				output: this.output,
 			});
@@ -600,20 +687,18 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 
 		try {
 			const { requestTimeoutMs } = getConfig();
-			const { token, cookie } = await this.getAuth();
-			if (!token || !cookie) {
+			const { token } = await this.getAuth();
+			if (!token) {
 				void view.webview.postMessage({
 					type: 'rightcodeBar.dashboard.usageStats',
 					ok: false,
-					error:
-						'未配置认证信息：请通过命令面板执行 “RightCode: Set Token (Secure)” / “RightCode: Set Cookie (Secure)”。',
+					error: '未配置认证信息：请在 VS Code 设置中填写 rightcodeBar.accounts 或 rightcodeBar.token。',
 				});
 				return;
 			}
 
 			const result = await fetchUseLogAdvancedStats({
 				token,
-				cookie,
 				startDate: params.startDate,
 				endDate: params.endDate,
 				granularity: params.granularity,
@@ -661,11 +746,19 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 	<div class="rc-bg" aria-hidden="true"></div>
 	<div class="page">
 		<header class="header">
-			<div class="brand">
-				<img class="brand__logo" src="${logoUri}" alt="" />
-				<div class="brand__text">
-					<div class="brand__title">RightCode Dashboard</div>
+			<div class="header__row">
+				<div class="brand">
+					<img class="brand__logo" src="${logoUri}" alt="" />
+					<div class="brand__text">
+						<div class="brand__title">RightCode Dashboard</div>
+					</div>
 				</div>
+				<div class="header__actions">
+					<button class="btn btn--ghost" id="accountSwitchBtn" type="button">切换账号</button>
+				</div>
+			</div>
+			<div class="header__meta">
+				<div class="header__account" id="accountText">账号：-</div>
 			</div>
 		</header>
 
@@ -797,53 +890,79 @@ function getNonce(): string {
 	return text;
 }
 
-function createAuthReader(params: {
-	context: vscode.ExtensionContext;
+function createAuthManager(params: {
 	output: vscode.OutputChannel;
-}): () => Promise<{ token: string; cookie: string }> {
-	let warnedTokenFromSettings = false;
-	let warnedCookieFromSettings = false;
+}): {
+	listAccounts: () => { accounts: RightCodeAccountConfig[]; activeAccount: string };
+	setActiveAccount: (alias: string) => Promise<void>;
+	getAuth: () => Promise<RightCodeAuthContext>;
+} {
+	let warnedLegacyToken = false;
+	let warnedInvalidActiveAccount = false;
 
-	return async (): Promise<{ token: string; cookie: string }> => {
-		const { token: tokenFromSettings, cookie: cookieFromSettings } = getConfig();
-		const tokenFromSecret = (await params.context.secrets.get(SECRET_KEY_TOKEN))?.trim() ?? '';
-		const cookieFromSecret = (await params.context.secrets.get(SECRET_KEY_COOKIE))?.trim() ?? '';
-
-		if (!tokenFromSecret && tokenFromSettings && !warnedTokenFromSettings) {
-			params.output.appendLine(
-				'[warn] rightcodeBar.token is read from settings.json (plain text). Prefer "RightCode: Set Token (Secure)".',
-			);
-			warnedTokenFromSettings = true;
-		}
-		if (!cookieFromSecret && cookieFromSettings && !warnedCookieFromSettings) {
-			params.output.appendLine(
-				'[warn] rightcodeBar.cookie is read from settings.json (plain text). Prefer "RightCode: Set Cookie (Secure)".',
-			);
-			warnedCookieFromSettings = true;
-		}
-
-		const token = normalizeTokenInput(tokenFromSecret || tokenFromSettings);
-		const cookie = normalizeCookieInput(cookieFromSecret || cookieFromSettings);
-		return { token, cookie };
+	const listAccounts = (): { accounts: RightCodeAccountConfig[]; activeAccount: string } => {
+		const { accounts, activeAccount } = getConfig();
+		return { accounts, activeAccount };
 	};
+
+	const setActiveAccount = async (alias: string): Promise<void> => {
+		const config = vscode.workspace.getConfiguration('rightcodeBar');
+		await config.update('activeAccount', alias, vscode.ConfigurationTarget.Global);
+	};
+
+	const getAuth = async (): Promise<RightCodeAuthContext> => {
+		const { token: tokenFromSettings, accounts, activeAccount } = getConfig();
+
+		if (accounts.length > 0) {
+			const resolved =
+				(activeAccount ? accounts.find((account) => account.alias === activeAccount) : undefined) ?? accounts[0]!;
+			if (activeAccount && resolved.alias !== activeAccount && !warnedInvalidActiveAccount) {
+				params.output.appendLine(
+					`[warn] rightcodeBar.activeAccount "${activeAccount}" not found. Using "${resolved.alias}".`,
+				);
+				warnedInvalidActiveAccount = true;
+			}
+
+			return {
+				token: resolved.token,
+				accountLabel: resolved.alias,
+				accountAlias: resolved.alias,
+			};
+		}
+
+		const normalizedToken = normalizeTokenInput(tokenFromSettings);
+		if (normalizedToken && !warnedLegacyToken) {
+			params.output.appendLine('[warn] rightcodeBar.token is read from settings.json (plain text).');
+			warnedLegacyToken = true;
+		}
+
+		return {
+			token: normalizedToken,
+			accountLabel: normalizedToken ? '默认' : '未配置',
+		};
+	};
+
+	return { listAccounts, setActiveAccount, getAuth };
 }
 
 export function activate(context: vscode.ExtensionContext) {
 	const output = vscode.window.createOutputChannel('RightCode Bar');
 	context.subscriptions.push(output);
 
-	const getAuth = createAuthReader({ context, output });
+	const authManager = createAuthManager({ output });
+	const getAuth = authManager.getAuth;
 
+	const dashboardProvider = new DashboardViewProvider(context.extensionUri, output, getAuth);
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(
 			DashboardViewProvider.viewType,
-			new DashboardViewProvider(context.extensionUri, output, getAuth),
+			dashboardProvider,
 		),
 	);
 
 	const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 	statusBarItem.name = 'RightCode Subscription';
-	statusBarItem.command = 'rightcode-bar.refresh';
+	statusBarItem.command = COMMAND_REFRESH;
 	statusBarItem.text = '加载中...';
 	statusBarItem.show();
 	context.subscriptions.push(statusBarItem);
@@ -860,14 +979,14 @@ export function activate(context: vscode.ExtensionContext) {
 		const refreshedAt = new Date();
 		try {
 			const { requestTimeoutMs } = getConfig();
-			const { token, cookie } = await getAuth();
-			if (!token || !cookie) {
+			const { token, accountLabel } = await getAuth();
+			if (!token) {
 				statusBarItem.text = STATUS_TEXT_ERROR;
 				statusBarItem.tooltip = buildMissingConfigTooltip();
 				return;
 			}
 
-			const result = await fetchSubscriptionList({ token, cookie, requestTimeoutMs, output });
+			const result = await fetchSubscriptionList({ token, requestTimeoutMs, output });
 			if (result.total <= 0 || result.subscriptions.length === 0) {
 				statusBarItem.text = '当前暂无订阅';
 				statusBarItem.tooltip = buildNoSubscriptionTooltip(refreshedAt);
@@ -881,8 +1000,9 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			statusBarItem.text = `${selected.name} 剩余 $${formatQuota(selected.remainingQuota)}`;
+			statusBarItem.text = `${accountLabel} · ${selected.name} 剩余 $${formatQuota(selected.remainingQuota)}`;
 			statusBarItem.tooltip = buildSuccessTooltip({
+				accountLabel,
 				selected,
 				all: result.subscriptions,
 				refreshedAt,
@@ -910,66 +1030,54 @@ export function activate(context: vscode.ExtensionContext) {
 	};
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('rightcode-bar.refresh', async () => {
+		vscode.commands.registerCommand(COMMAND_REFRESH, async () => {
 			await refresh();
 		}),
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('rightcode-bar.setToken', async () => {
-			const token = await vscode.window.showInputBox({
-				title: 'RightCode Token',
-				prompt: 'Paste your RightCode token (can include "Bearer " prefix). Stored securely in OS keychain.',
-				password: true,
+		vscode.commands.registerCommand(COMMAND_ACCOUNT_SWITCH, async () => {
+			const { accounts, activeAccount } = authManager.listAccounts();
+			if (accounts.length === 0) {
+				const { token } = getConfig();
+				const message = token
+					? '当前使用 rightcodeBar.token（单账号）。如需多账号，请在设置中填写 rightcodeBar.accounts。'
+					: '尚未配置 RightCode 账号：请在设置中填写 rightcodeBar.accounts 或 rightcodeBar.token。';
+				const choice = await vscode.window.showInformationMessage(message, '打开设置');
+				if (choice === '打开设置') {
+					await vscode.commands.executeCommand(COMMAND_OPEN_SETTINGS);
+				}
+				return;
+			}
+
+			const resolvedActive =
+				(activeAccount ? accounts.find((account) => account.alias === activeAccount) : undefined) ?? accounts[0]!;
+
+			type AccountPickItem = vscode.QuickPickItem & { alias: string };
+			const items: AccountPickItem[] = [...accounts]
+				.sort((a, b) => a.alias.localeCompare(b.alias, 'zh-CN'))
+				.map((account) => ({
+					label: account.alias,
+					description: account.alias === resolvedActive.alias ? '当前' : undefined,
+					alias: account.alias,
+				}));
+
+			const picked = await vscode.window.showQuickPick(items, {
+				title: '切换 RightCode 账号',
+				placeHolder: '选择一个账号',
 				ignoreFocusOut: true,
-				validateInput: (value) => (normalizeTokenInput(value) ? undefined : 'Token 不能为空'),
 			});
-			if (token === undefined) {
+			if (!picked) {
 				return;
 			}
-			await context.secrets.store(SECRET_KEY_TOKEN, normalizeTokenInput(token));
-			vscode.window.showInformationMessage('RightCode token 已安全保存');
-			void refresh();
+
+			await authManager.setActiveAccount(picked.alias);
+			vscode.window.showInformationMessage(`已切换 RightCode 账号：${picked.label}`);
 		}),
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('rightcode-bar.setCookie', async () => {
-			const cookie = await vscode.window.showInputBox({
-				title: 'RightCode Cookie',
-				prompt: 'Paste Cookie header value (e.g. "cf_clearance=..."). Stored securely in OS keychain.',
-				password: true,
-				ignoreFocusOut: true,
-				validateInput: (value) => (normalizeCookieInput(value) ? undefined : 'Cookie 不能为空'),
-			});
-			if (cookie === undefined) {
-				return;
-			}
-			await context.secrets.store(SECRET_KEY_COOKIE, normalizeCookieInput(cookie));
-			vscode.window.showInformationMessage('RightCode cookie 已安全保存');
-			void refresh();
-		}),
-	);
-
-	context.subscriptions.push(
-		vscode.commands.registerCommand('rightcode-bar.clearAuth', async () => {
-			const choice = await vscode.window.showWarningMessage(
-				'Clear saved RightCode token/cookie from OS keychain?',
-				{ modal: true },
-				'Clear',
-			);
-			if (choice !== 'Clear') {
-				return;
-			}
-			await context.secrets.delete(SECRET_KEY_TOKEN);
-			await context.secrets.delete(SECRET_KEY_COOKIE);
-			vscode.window.showInformationMessage('RightCode token/cookie 已清除');
-			void refresh();
-		}),
-	);
-
-	context.subscriptions.push(
-		vscode.commands.registerCommand('rightcode-bar.openSettings', async () => {
+		vscode.commands.registerCommand(COMMAND_OPEN_SETTINGS, async () => {
 			await vscode.commands.executeCommand('workbench.action.openSettings', 'rightcodeBar');
 		}),
 	);
@@ -977,6 +1085,9 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration((event) => {
 			if (event.affectsConfiguration('rightcodeBar')) {
+				if (event.affectsConfiguration('rightcodeBar.accounts') || event.affectsConfiguration('rightcodeBar.activeAccount')) {
+					void dashboardProvider.notifyAccountChanged();
+				}
 				updateTimer();
 				void refresh();
 			}
