@@ -23,6 +23,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:rightcode-bar.refresh",
+    "onCommand:rightcode-bar.account.add",
     "onCommand:rightcode-bar.account.switch",
     "onCommand:rightcode-bar.openSettings",
     "onView:rightcodeBar.dashboard"
@@ -51,6 +52,10 @@
       {
         "command": "rightcode-bar.refresh",
         "title": "RightCode: Refresh Subscription"
+      },
+      {
+        "command": "rightcode-bar.account.add",
+        "title": "RightCode: Add Account"
       },
       {
         "command": "rightcode-bar.account.switch",
@@ -107,12 +112,6 @@
           "default": "",
           "scope": "application",
           "description": "Active account alias (matches an item in rightcodeBar.accounts). Empty uses the first account."
-        },
-        "rightcodeBar.token": {
-          "type": "string",
-          "default": "",
-          "scope": "application",
-          "markdownDescription": "RightCode token used for `Authorization: Bearer <token>` (single-account fallback). For multi-account, use `rightcodeBar.accounts` + `rightcodeBar.activeAccount`. Stored in `settings.json` in plain text."
         },
         "rightcodeBar.refreshIntervalSeconds": {
           "type": "number",

@@ -58,9 +58,17 @@ type RightCodeAccountConfig = {
 	token: string;
 };
 
+type RightCodeLoginResult = {
+	userToken: string;
+	username?: string;
+	email?: string;
+};
+
 const RIGHTCODE_SUBSCRIPTIONS_URL = 'https://right.codes/subscriptions/list';
 const RIGHTCODE_USE_LOG_ADVANCED_URL = 'https://right.codes/use-log/stats/advanced';
+const RIGHTCODE_AUTH_LOGIN_URL = 'https://right.codes/auth/login';
 const RIGHTCODE_REFERER = 'https://right.codes/dashboard';
+const RIGHTCODE_LOGIN_REFERER = 'https://right.codes/login';
 const DEFAULT_USER_AGENT =
 	'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:146.0) Gecko/20100101 Firefox/146.0';
 const STATUS_TEXT_ERROR = '获取订阅失败，请检查 token';
@@ -68,7 +76,9 @@ const STATUS_TEXT_DASHBOARD_ERROR = '获取数据失败，请检查 token';
 
 const COMMAND_REFRESH = 'rightcode-bar.refresh';
 const COMMAND_OPEN_SETTINGS = 'rightcode-bar.openSettings';
+const COMMAND_ACCOUNT_ADD = 'rightcode-bar.account.add';
 const COMMAND_ACCOUNT_SWITCH = 'rightcode-bar.account.switch';
+const DEFAULT_ACCOUNT_ALIAS = 'default';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
@@ -308,6 +318,98 @@ async function fetchSubscriptionList(params: {
 	}
 }
 
+type RightCodeLoginErrorCode = 'INVALID_CREDENTIALS' | 'FORBIDDEN' | 'REQUEST_FAILED' | 'INVALID_RESPONSE';
+
+function createRightCodeLoginError(
+	code: RightCodeLoginErrorCode,
+	message: string,
+): Error & { code: RightCodeLoginErrorCode } {
+	const error = new Error(message) as Error & { code: RightCodeLoginErrorCode };
+	error.code = code;
+	return error;
+}
+
+function isRightCodeLoginError(error: unknown): error is Error & { code: RightCodeLoginErrorCode } {
+	return error instanceof Error && 'code' in error;
+}
+
+function parseLoginResult(raw: unknown): RightCodeLoginResult {
+	if (!isRecord(raw)) {
+		throw createRightCodeLoginError('INVALID_RESPONSE', 'Unexpected login response: not an object');
+	}
+
+	const userToken = parseString(raw.user_token);
+	if (!userToken) {
+		throw createRightCodeLoginError('INVALID_RESPONSE', 'Unexpected login response: missing user_token');
+	}
+
+	return {
+		userToken,
+		username: parseString(raw.username),
+		email: parseString(raw.email),
+	};
+}
+
+async function fetchLoginByPassword(params: {
+	username: string;
+	password: string;
+	requestTimeoutMs: number;
+	output: vscode.OutputChannel;
+}): Promise<RightCodeLoginResult> {
+	const controller = new AbortController();
+	const timeoutHandle = setTimeout(() => controller.abort(), params.requestTimeoutMs);
+
+	try {
+		const response = await fetch(RIGHTCODE_AUTH_LOGIN_URL, {
+			method: 'POST',
+			headers: {
+				Accept: '*/*',
+				'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+				'Accept-Encoding': 'gzip, deflate, br',
+				'Content-Type': 'application/json',
+				'User-Agent': DEFAULT_USER_AGENT,
+				Origin: 'https://right.codes',
+				Referer: RIGHTCODE_LOGIN_REFERER,
+				'Sec-GPC': '1',
+			},
+			body: JSON.stringify({ username: params.username, password: params.password }),
+			signal: controller.signal,
+		});
+
+		const responseText = await response.text();
+		if (!response.ok) {
+			params.output.appendLine(`HTTP ${response.status} ${response.statusText} from ${RIGHTCODE_AUTH_LOGIN_URL}`);
+
+			if (response.status === 400 || response.status === 401 || response.status === 422) {
+				throw createRightCodeLoginError('INVALID_CREDENTIALS', 'Invalid credentials');
+			}
+
+			if (response.status === 403) {
+				throw createRightCodeLoginError('FORBIDDEN', 'Login forbidden');
+			}
+
+			throw createRightCodeLoginError('REQUEST_FAILED', `Request failed: HTTP ${response.status}`);
+		}
+
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(responseText) as unknown;
+		} catch {
+			params.output.appendLine(`Failed to parse JSON from ${RIGHTCODE_AUTH_LOGIN_URL}`);
+			throw createRightCodeLoginError('INVALID_RESPONSE', 'Login failed: invalid JSON response');
+		}
+
+		return parseLoginResult(parsed);
+	} catch (error) {
+		if (error instanceof Error && error.name === 'AbortError') {
+			throw createRightCodeLoginError('REQUEST_FAILED', 'Login failed: request timeout');
+		}
+		throw error;
+	} finally {
+		clearTimeout(timeoutHandle);
+	}
+}
+
 function parseUseLogTrendItem(raw: unknown): RightCodeUseLogTrendItem | undefined {
 	if (!isRecord(raw)) {
 		return undefined;
@@ -498,9 +600,8 @@ function buildMissingConfigTooltip(): vscode.MarkdownString {
 	tooltip.appendMarkdown(`**RightCode 订阅**\n\n`);
 	tooltip.appendMarkdown(`未配置认证信息：\n\n`);
 	tooltip.appendMarkdown(`- 推荐：在用户设置中填写 \`rightcodeBar.accounts\`（多账号：别名 + token）\n`);
-	tooltip.appendMarkdown(`- 或者：填写 \`rightcodeBar.token\`（单账号）\n\n`);
-	tooltip.appendMarkdown(`快捷：([切换账号](command:${COMMAND_ACCOUNT_SWITCH})) / ([打开设置](command:${COMMAND_OPEN_SETTINGS}))\n\n`);
-	tooltip.appendMarkdown(`命令面板：\`RightCode: Open Settings\`。\n`);
+	tooltip.appendMarkdown(`快捷：([切换账号](command:${COMMAND_ACCOUNT_SWITCH})) / ([打开设置](command:${COMMAND_OPEN_SETTINGS})) / ([添加账号](command:${COMMAND_ACCOUNT_ADD}))\n\n`);
+	tooltip.appendMarkdown(`命令面板：\`RightCode: Add Account\` / \`RightCode: Open Settings\`。\n`);
 	return tooltip;
 }
 
@@ -521,19 +622,17 @@ function buildNoSubscriptionTooltip(refreshedAt: Date): vscode.MarkdownString {
 }
 
 function getConfig(): {
-	token: string;
 	accounts: RightCodeAccountConfig[];
 	activeAccount: string;
 	refreshIntervalSeconds: number;
 	requestTimeoutMs: number;
 } {
 	const config = vscode.workspace.getConfiguration('rightcodeBar');
-	const token = (config.get<string>('token') ?? '').trim();
 	const accounts = uniqAccountsByAlias(parseAccountsConfig(config.get<unknown>('accounts')));
 	const activeAccount = (config.get<string>('activeAccount') ?? '').trim();
 	const refreshIntervalSeconds = config.get<number>('refreshIntervalSeconds') ?? 300;
 	const requestTimeoutMs = config.get<number>('requestTimeoutMs') ?? 15000;
-	return { token, accounts, activeAccount, refreshIntervalSeconds, requestTimeoutMs };
+	return { accounts, activeAccount, refreshIntervalSeconds, requestTimeoutMs };
 }
 
 class DashboardViewProvider implements vscode.WebviewViewProvider {
@@ -639,7 +738,7 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 				void view.webview.postMessage({
 					type: 'rightcodeBar.dashboard.subscriptions',
 					ok: false,
-					error: '未配置认证信息：请在 VS Code 设置中填写 rightcodeBar.accounts 或 rightcodeBar.token。',
+					error: '未配置认证信息：请使用命令 RightCode: Add Account，或在 VS Code 设置中填写 rightcodeBar.accounts。',
 				});
 				return;
 			}
@@ -692,7 +791,7 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 				void view.webview.postMessage({
 					type: 'rightcodeBar.dashboard.usageStats',
 					ok: false,
-					error: '未配置认证信息：请在 VS Code 设置中填写 rightcodeBar.accounts 或 rightcodeBar.token。',
+					error: '未配置认证信息：请使用命令 RightCode: Add Account，或在 VS Code 设置中填写 rightcodeBar.accounts。',
 				});
 				return;
 			}
@@ -890,6 +989,175 @@ function getNonce(): string {
 	return text;
 }
 
+async function migrateLegacyTokenToAccountsIfNeeded(params: { output: vscode.OutputChannel }): Promise<void> {
+	const config = vscode.workspace.getConfiguration('rightcodeBar');
+	const tokenFromSettings = (config.get<string>('token') ?? '').trim();
+	const normalizedToken = normalizeTokenInput(tokenFromSettings);
+	if (!normalizedToken) {
+		return;
+	}
+
+	const accounts = uniqAccountsByAlias(parseAccountsConfig(config.get<unknown>('accounts')));
+	const activeAccount = (config.get<string>('activeAccount') ?? '').trim();
+
+	const alreadyInAccounts = accounts.some((account) => account.token === normalizedToken);
+	if (!alreadyInAccounts) {
+		let alias = DEFAULT_ACCOUNT_ALIAS;
+		if (accounts.some((account) => account.alias === alias)) {
+			let suffix = 2;
+			while (accounts.some((account) => account.alias === `${DEFAULT_ACCOUNT_ALIAS}-${suffix}`)) {
+				suffix += 1;
+			}
+			alias = `${DEFAULT_ACCOUNT_ALIAS}-${suffix}`;
+		}
+		const merged = [...accounts, { alias, token: normalizedToken }];
+		await config.update('accounts', merged, vscode.ConfigurationTarget.Global);
+		if (!activeAccount && accounts.length === 0) {
+			await config.update('activeAccount', alias, vscode.ConfigurationTarget.Global);
+		}
+		params.output.appendLine(`[info] Migrated legacy rightcodeBar.token into rightcodeBar.accounts as "${alias}".`);
+	}
+
+	try {
+		await config.update('token', undefined, vscode.ConfigurationTarget.Global);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		params.output.appendLine(`[warn] Failed to remove legacy rightcodeBar.token: ${message}`);
+	}
+}
+
+async function runAddAccountFlow(params: { output: vscode.OutputChannel }): Promise<void> {
+	type MethodPickItem = vscode.QuickPickItem & { method: 'password' | 'manualToken' };
+
+	const picked = await vscode.window.showQuickPick<MethodPickItem>(
+		[
+			{
+				label: '\u90ae\u7bb1/\u7528\u6237\u540d + \u5bc6\u7801\u767b\u5f55',
+				description: '\u81ea\u52a8\u83b7\u53d6 token\uff0c\u9002\u7528\u4e8e\u975e linux.do OAuth2 \u8d26\u53f7',
+				method: 'password',
+			},
+			{
+				label: 'linux.do OAuth2 (\u624b\u52a8 token)',
+				description: '\u8bf7\u81ea\u884c\u83b7\u53d6 token\uff0c\u7136\u540e\u586b\u5165 rightcodeBar.accounts',
+				method: 'manualToken',
+			},
+		],
+		{
+			title: '\u6dfb\u52a0 RightCode \u8d26\u53f7',
+			placeHolder: '\u9009\u62e9\u767b\u5f55\u65b9\u5f0f',
+			ignoreFocusOut: true,
+		},
+	);
+	if (!picked) {
+		return;
+	}
+
+	if (picked.method === 'manualToken') {
+		await vscode.commands.executeCommand(COMMAND_OPEN_SETTINGS);
+		return;
+	}
+
+	const loginUsername = await vscode.window.showInputBox({
+		title: '\u767b\u5f55 RightCode',
+		prompt: '\u8bf7\u8f93\u5165\u90ae\u7bb1\u6216\u7528\u6237\u540d',
+		ignoreFocusOut: true,
+		validateInput: (value) => (value.trim() ? undefined : '\u4e0d\u80fd\u4e3a\u7a7a'),
+	});
+	if (!loginUsername) {
+		return;
+	}
+
+	const loginPassword = await vscode.window.showInputBox({
+		title: '\u767b\u5f55 RightCode',
+		prompt: '\u8bf7\u8f93\u5165\u5bc6\u7801',
+		password: true,
+		ignoreFocusOut: true,
+		validateInput: (value) => (value ? undefined : '\u4e0d\u80fd\u4e3a\u7a7a'),
+	});
+	if (!loginPassword) {
+		return;
+	}
+
+	const { requestTimeoutMs } = getConfig();
+	let loginResult: RightCodeLoginResult;
+	try {
+		loginResult = await fetchLoginByPassword({
+			username: loginUsername.trim(),
+			password: loginPassword,
+			requestTimeoutMs,
+			output: params.output,
+		});
+	} catch (error) {
+		if (isRightCodeLoginError(error)) {
+			if (error.code === 'INVALID_CREDENTIALS') {
+				vscode.window.showErrorMessage('\u7528\u6237\u540d\u6216\u8005\u5bc6\u7801\u9519\u8bef');
+				return;
+			}
+			if (error.code === 'FORBIDDEN') {
+				vscode.window.showErrorMessage(
+					'\u767b\u5f55\u88ab\u62d2\u7edd\uff08\u53ef\u80fd\u9700\u8981\u6d4f\u89c8\u5668\u9a8c\u8bc1\uff09\uff0c\u8bf7\u6539\u7528\u624b\u52a8 token \u6dfb\u52a0\u3002',
+				);
+				return;
+			}
+		}
+
+		const message = error instanceof Error ? error.message : String(error);
+		vscode.window.showErrorMessage(`\u767b\u5f55\u5931\u8d25\uff1a${message}`);
+		return;
+	}
+
+	const suggestedAlias = (loginResult.username ?? loginUsername).trim();
+	const normalizedToken = normalizeTokenInput(loginResult.userToken);
+
+	const config = vscode.workspace.getConfiguration('rightcodeBar');
+	let accounts = uniqAccountsByAlias(parseAccountsConfig(config.get<unknown>('accounts')));
+
+	while (true) {
+		const aliasRaw = await vscode.window.showInputBox({
+			title: '\u8d26\u53f7\u522b\u540d',
+			prompt: '\u7528\u4e8e\u72b6\u6001\u680f/\u9762\u677f\u663e\u793a',
+			value: suggestedAlias,
+			ignoreFocusOut: true,
+			validateInput: (value) => (value.trim() ? undefined : '\u4e0d\u80fd\u4e3a\u7a7a'),
+		});
+		if (!aliasRaw) {
+			return;
+		}
+
+		const alias = aliasRaw.trim();
+		const existingIndex = accounts.findIndex((account) => account.alias === alias);
+		if (existingIndex === -1) {
+			accounts = [...accounts, { alias, token: normalizedToken }];
+			await config.update('accounts', accounts, vscode.ConfigurationTarget.Global);
+			await config.update('activeAccount', alias, vscode.ConfigurationTarget.Global);
+			vscode.window.showInformationMessage(`\u5df2\u6dfb\u52a0 RightCode \u8d26\u53f7\uff1a${alias}`);
+			return;
+		}
+
+		const overwrite = '\u8986\u76d6';
+		const reenter = '\u91cd\u65b0\u8f93\u5165\u522b\u540d';
+		const choice = await vscode.window.showWarningMessage(
+			`\u8d26\u53f7\u522b\u540d \"${alias}\" \u5df2\u5b58\u5728\uff0c\u662f\u5426\u8986\u76d6\uff1f`,
+			{ modal: true },
+			overwrite,
+			reenter,
+		);
+		if (choice === overwrite) {
+			accounts = accounts.map((account, index) =>
+				index === existingIndex ? { alias, token: normalizedToken } : account,
+			);
+			await config.update('accounts', accounts, vscode.ConfigurationTarget.Global);
+			await config.update('activeAccount', alias, vscode.ConfigurationTarget.Global);
+			vscode.window.showInformationMessage(`\u5df2\u66f4\u65b0 RightCode \u8d26\u53f7\uff1a${alias}`);
+			return;
+		}
+		if (choice === reenter) {
+			continue;
+		}
+		return;
+	}
+}
+
 function createAuthManager(params: {
 	output: vscode.OutputChannel;
 }): {
@@ -897,7 +1165,6 @@ function createAuthManager(params: {
 	setActiveAccount: (alias: string) => Promise<void>;
 	getAuth: () => Promise<RightCodeAuthContext>;
 } {
-	let warnedLegacyToken = false;
 	let warnedInvalidActiveAccount = false;
 
 	const listAccounts = (): { accounts: RightCodeAccountConfig[]; activeAccount: string } => {
@@ -911,8 +1178,7 @@ function createAuthManager(params: {
 	};
 
 	const getAuth = async (): Promise<RightCodeAuthContext> => {
-		const { token: tokenFromSettings, accounts, activeAccount } = getConfig();
-
+		const { accounts, activeAccount } = getConfig();
 		if (accounts.length > 0) {
 			const resolved =
 				(activeAccount ? accounts.find((account) => account.alias === activeAccount) : undefined) ?? accounts[0]!;
@@ -930,24 +1196,20 @@ function createAuthManager(params: {
 			};
 		}
 
-		const normalizedToken = normalizeTokenInput(tokenFromSettings);
-		if (normalizedToken && !warnedLegacyToken) {
-			params.output.appendLine('[warn] rightcodeBar.token is read from settings.json (plain text).');
-			warnedLegacyToken = true;
-		}
-
 		return {
-			token: normalizedToken,
-			accountLabel: normalizedToken ? '默认' : '未配置',
+			token: '',
+			accountLabel: '未配置',
 		};
 	};
 
 	return { listAccounts, setActiveAccount, getAuth };
 }
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
 	const output = vscode.window.createOutputChannel('RightCode Bar');
 	context.subscriptions.push(output);
+
+	await migrateLegacyTokenToAccountsIfNeeded({ output });
 
 	const authManager = createAuthManager({ output });
 	const getAuth = authManager.getAuth;
@@ -1036,14 +1298,24 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 
 	context.subscriptions.push(
+		vscode.commands.registerCommand(COMMAND_ACCOUNT_ADD, async () => {
+			await runAddAccountFlow({ output });
+		}),
+	);
+
+	context.subscriptions.push(
 		vscode.commands.registerCommand(COMMAND_ACCOUNT_SWITCH, async () => {
 			const { accounts, activeAccount } = authManager.listAccounts();
 			if (accounts.length === 0) {
-				const { token } = getConfig();
-				const message = token
-					? '当前使用 rightcodeBar.token（单账号）。如需多账号，请在设置中填写 rightcodeBar.accounts。'
-					: '尚未配置 RightCode 账号：请在设置中填写 rightcodeBar.accounts 或 rightcodeBar.token。';
-				const choice = await vscode.window.showInformationMessage(message, '打开设置');
+				const choice = await vscode.window.showInformationMessage(
+					'尚未配置 RightCode 账号：请使用 RightCode: Add Account 登录，或在设置中填写 rightcodeBar.accounts。',
+					'添加账号',
+					'打开设置',
+				);
+				if (choice === '添加账号') {
+					await vscode.commands.executeCommand(COMMAND_ACCOUNT_ADD);
+					return;
+				}
 				if (choice === '打开设置') {
 					await vscode.commands.executeCommand(COMMAND_OPEN_SETTINGS);
 				}
