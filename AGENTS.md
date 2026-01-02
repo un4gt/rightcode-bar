@@ -36,11 +36,11 @@
 ## Commit & Pull Request Guidelines
 
 - Use Conventional Commits seen in history: `feat: ...`, `fix: ...`, `ci: ...`, `chore(scope): ...` (e.g. `chore(release): v0.0.2`).
-- PRs should include: a clear description, manual verification steps (VS Code `F5` Extension Development Host), and screenshots of the status bar/tooltip when UI changes (redact tokens/cookies).
+- PRs should include: a clear description, manual verification steps (VS Code `F5` Extension Development Host), and screenshots of the status bar/tooltip when UI changes (redact tokens).
 - Don’t commit generated artifacts (`out/`, `dist/`, `node_modules/`) unless the change explicitly requires it.
 - Releases are automated on tags: push `vX.Y.Z` to trigger VSIX packaging + Marketplace publish.
 
 ## Security & Configuration
 
-- Never commit or paste real `rightcodeBar.token` / `rightcodeBar.cookie` values in issues, PRs, logs, or screenshots.
-- Prefer secure storage via commands: `RightCode: Set Token (Secure)` and `RightCode: Set Cookie (Secure)`.
+- Never commit or paste real `rightcodeBar.accounts[].token` values in issues, PRs, logs, or screenshots.
+- The extension no longer supports `rightcodeBar.cookie`; tokens live in user `settings.json` in plain text under `rightcodeBar.accounts`.

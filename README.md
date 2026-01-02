@@ -25,7 +25,6 @@
 
 - `rightcodeBar.accounts`（推荐：多账号）
 - `rightcodeBar.activeAccount`（当前账号别名；留空默认第一个）
-- 或者：`rightcodeBar.token`（单账号）
 
 示例：
 
@@ -39,10 +38,11 @@
 }
 ```
 
-升级提示（0.0.4+）：不再需要/支持 `rightcodeBar.cookie`，也移除了所有“安全输入/密钥链”相关命令；请改用以上设置项。
+升级提示：不再需要/支持 `rightcodeBar.cookie`；`rightcodeBar.token` 已废弃，会在启动时迁移到 `rightcodeBar.accounts`（alias: `default`）。
 
 命令面板：
 
+- `RightCode: Add Account`
 - `RightCode: Refresh Subscription`
 - `RightCode: Switch Account`
 - `RightCode: Open Settings`
