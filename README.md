@@ -38,7 +38,7 @@
 }
 ```
 
-升级提示：不再需要/支持 `rightcodeBar.cookie`；`rightcodeBar.token` 已废弃，会在启动时迁移到 `rightcodeBar.accounts`（alias: `default`）。
+升级提示（0.0.5+）：不再需要/支持 `rightcodeBar.cookie`；`rightcodeBar.token` 已废弃，会在启动时迁移到 `rightcodeBar.accounts`（alias: `default`）。
 
 命令面板：
 

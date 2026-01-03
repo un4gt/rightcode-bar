@@ -6,6 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.5]
+
 - 新增命令：`RightCode: Add Account`（用户名/邮箱 + 密码登录获取 token）
 - 迁移：`rightcodeBar.token` 自动迁移到 `rightcodeBar.accounts`（alias: `default`）
 
