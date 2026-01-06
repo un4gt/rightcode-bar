@@ -6,6 +6,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.6]
+
+- 新增设置：`显示已失效的订阅`（`rightcodeBar.showExpiredSubscriptions`，默认关闭），默认按 `expired_at` 隐藏已过期订阅（状态栏与 Dashboard）。
+
 ## [0.0.5]
 
 - 新增命令：`RightCode: Add Account`（用户名/邮箱 + 密码登录获取 token）

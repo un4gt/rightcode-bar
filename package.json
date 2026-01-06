@@ -3,7 +3,7 @@
   "publisher": "tumuerzunong",
   "displayName": "rightcode-bar",
   "description": "show your rightcode subscriptions in vscode",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "license": "MIT",
   "icon": "images/rightcode.png",
   "repository": {
