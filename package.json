@@ -126,6 +126,13 @@
           "minimum": 1000,
           "scope": "application",
           "description": "Request timeout in milliseconds."
+        },
+        "rightcodeBar.showExpiredSubscriptions": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "title": "显示已失效的订阅",
+          "markdownDescription": "是否显示已失效（已过期）的订阅。未勾选时，会按 `expired_at` 判断并在状态栏与 Dashboard 中隐藏已过期订阅。"
         }
       }
     }

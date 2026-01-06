@@ -222,6 +222,44 @@ function pickDisplaySubscription(subscriptions: RightCodeSubscription[]): RightC
 	return [...subscriptions].sort((a, b) => usedQuota(a) - usedQuota(b))[0];
 }
 
+function parseDateTimeMs(value: string): number | undefined {
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return undefined;
+	}
+
+	const parsed = Date.parse(trimmed);
+	if (!Number.isFinite(parsed)) {
+		return undefined;
+	}
+	return parsed;
+}
+
+function isSubscriptionExpired(subscription: Pick<RightCodeSubscription, 'expiredAt'>, nowMs: number): boolean {
+	if (!subscription.expiredAt) {
+		return false;
+	}
+
+	const expiredAtMs = parseDateTimeMs(subscription.expiredAt);
+	if (expiredAtMs === undefined) {
+		return false;
+	}
+
+	return nowMs >= expiredAtMs;
+}
+
+function filterExpiredSubscriptions(
+	subscriptions: RightCodeSubscription[],
+	params: { showExpiredSubscriptions: boolean },
+): RightCodeSubscription[] {
+	if (params.showExpiredSubscriptions) {
+		return subscriptions;
+	}
+
+	const nowMs = Date.now();
+	return subscriptions.filter((subscription) => !isSubscriptionExpired(subscription, nowMs));
+}
+
 function parseSubscription(raw: unknown): RightCodeSubscription | undefined {
 	if (!isRecord(raw)) {
 		return undefined;
@@ -626,13 +664,15 @@ function getConfig(): {
 	activeAccount: string;
 	refreshIntervalSeconds: number;
 	requestTimeoutMs: number;
+	showExpiredSubscriptions: boolean;
 } {
 	const config = vscode.workspace.getConfiguration('rightcodeBar');
 	const accounts = uniqAccountsByAlias(parseAccountsConfig(config.get<unknown>('accounts')));
 	const activeAccount = (config.get<string>('activeAccount') ?? '').trim();
 	const refreshIntervalSeconds = config.get<number>('refreshIntervalSeconds') ?? 300;
 	const requestTimeoutMs = config.get<number>('requestTimeoutMs') ?? 15000;
-	return { accounts, activeAccount, refreshIntervalSeconds, requestTimeoutMs };
+	const showExpiredSubscriptions = config.get<boolean>('showExpiredSubscriptions') ?? false;
+	return { accounts, activeAccount, refreshIntervalSeconds, requestTimeoutMs, showExpiredSubscriptions };
 }
 
 class DashboardViewProvider implements vscode.WebviewViewProvider {
@@ -720,7 +760,7 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 		});
 	}
 
-	private async refreshSubscriptions(): Promise<void> {
+	async refreshSubscriptions(): Promise<void> {
 		const view = this.currentView;
 		if (!view) {
 			return;
@@ -732,7 +772,7 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 		this.refreshSubscriptionsInProgress = true;
 
 		try {
-			const { requestTimeoutMs } = getConfig();
+			const { requestTimeoutMs, showExpiredSubscriptions } = getConfig();
 			const { token } = await this.getAuth();
 			if (!token) {
 				void view.webview.postMessage({
@@ -749,12 +789,13 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 				output: this.output,
 			});
 
+			const subscriptions = filterExpiredSubscriptions(result.subscriptions, { showExpiredSubscriptions });
 			void view.webview.postMessage({
 				type: 'rightcodeBar.dashboard.subscriptions',
 				ok: true,
 				refreshedAt: new Date().toISOString(),
-				total: result.total,
-				subscriptions: result.subscriptions,
+				total: subscriptions.length,
+				subscriptions,
 			});
 		} catch (error) {
 			const messageText = error instanceof Error ? error.message : String(error);
@@ -1240,7 +1281,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 		const refreshedAt = new Date();
 		try {
-			const { requestTimeoutMs } = getConfig();
+			const { requestTimeoutMs, showExpiredSubscriptions } = getConfig();
 			const { token, accountLabel } = await getAuth();
 			if (!token) {
 				statusBarItem.text = STATUS_TEXT_ERROR;
@@ -1249,13 +1290,14 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 
 			const result = await fetchSubscriptionList({ token, requestTimeoutMs, output });
-			if (result.total <= 0 || result.subscriptions.length === 0) {
+			const subscriptions = filterExpiredSubscriptions(result.subscriptions, { showExpiredSubscriptions });
+			if (subscriptions.length === 0) {
 				statusBarItem.text = '当前暂无订阅';
 				statusBarItem.tooltip = buildNoSubscriptionTooltip(refreshedAt);
 				return;
 			}
 
-			const selected = pickDisplaySubscription(result.subscriptions);
+			const selected = pickDisplaySubscription(subscriptions);
 			if (!selected) {
 				statusBarItem.text = '当前暂无订阅';
 				statusBarItem.tooltip = buildNoSubscriptionTooltip(refreshedAt);
@@ -1266,7 +1308,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			statusBarItem.tooltip = buildSuccessTooltip({
 				accountLabel,
 				selected,
-				all: result.subscriptions,
+				all: subscriptions,
 				refreshedAt,
 			});
 		} catch (error) {
@@ -1359,6 +1401,9 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (event.affectsConfiguration('rightcodeBar')) {
 				if (event.affectsConfiguration('rightcodeBar.accounts') || event.affectsConfiguration('rightcodeBar.activeAccount')) {
 					void dashboardProvider.notifyAccountChanged();
+				}
+				if (event.affectsConfiguration('rightcodeBar.showExpiredSubscriptions')) {
+					void dashboardProvider.refreshSubscriptions();
 				}
 				updateTimer();
 				void refresh();
